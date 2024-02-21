@@ -53,10 +53,27 @@ class AnalyseController extends Controller
             $li = preg_replace('/\r/', '', $li);
             $resources[] = strip_tags($li);
         }
-        // dd($title, $goals, $resources);
+        $chatResponse = OpenAI::chat()->create([
+            'model' => 'gpt-3.5-turbo-0125',
+            'messages' => [
+                [
+                    'role' => 'user',
+                    'content' => [
+                        [
+                            "type" => "text",
+                            "text" => "I would like you to make a textual summary of the session with the following information: 
+                                The title of the session is: " . $title . ";\n
+                                The goals of the session are: " . implode(', ', $goals) . ";\n
+                                The resources of the session are: " . implode(', ', $resources) . ";\n",
+                        ],
+                    ]
+                ],
+            ],
+        ]);
+        dd($chatResponse);
 
         $name = md5(microtime());
-        $imageBase64 = BrowserShot::url($request->url)
+        BrowserShot::url($request->url)
         ->setChromePath('/root/.cache/puppeteer/chrome/linux-119.0.6045.105/chrome-linux64/chrome')
         ->useCookies([
             'axeptio_all_vendors' => '%2Cgoogle_analytics%2Cmatomo%2Clinkedin%2Ctwitter%2Cvimeo%2Cyoutube%2Cfacebook_pixel%2Cgoogle_ads%2Cslido%2CMatomo%2CLinkedin%2CTwitter%2CYoutube%2CGoogle_Ads%2C',
@@ -64,10 +81,9 @@ class AnalyseController extends Controller
             'axeptio_cookies' => '{%22$$token%22:%22of7ygq32bfrybpd0b55e%22%2C%22$$date%22:%222024-01-09T10:38:05.796Z%22%2C%22$$cookiesVersion%22:{%22name%22:%22pcronline-en%22%2C%22identifier%22:%2263fcc982fc0e5dc395ebcba4%22}%2C%22google_analytics%22:true%2C%22matomo%22:true%2C%22linkedin%22:true%2C%22twitter%22:true%2C%22vimeo%22:true%2C%22youtube%22:true%2C%22facebook_pixel%22:true%2C%22google_ads%22:true%2C%22slido%22:true%2C%22Matomo%22:true%2C%22Linkedin%22:true%2C%22Twitter%22:true%2C%22Youtube%22:true%2C%22Google_Ads%22:true%2C%22$$completed%22:true}',
         ])
         ->fullPage()
-        ->base64Screenshot();
-        //->save(storage_path('app/public/screenshots/' . $name . '.png'));
+        ->save(storage_path('app/public/screenshots/' . $name . '.png'));
 
-        // $imageBase64 = base64_encode(file_get_contents(storage_path('app/public/screenshots/' . $name . '.png')));
+        $imageBase64 = base64_encode(file_get_contents(storage_path('app/public/screenshots/' . $name . '.png')));
 
         $visionResponse = OpenAI::chat()->create([
             'model' => 'gpt-4-vision-preview',
@@ -94,6 +110,7 @@ class AnalyseController extends Controller
         $tokenIn = $visionResponse->usage->promptTokens;
         $tokenOut = $visionResponse->usage->completionTokens;
         $tokenTotal = $visionResponse->usage->totalTokens;
+        dd($response, $tokenIn, $tokenOut, $tokenTotal);
         return redirect()->back()->with('success', 'Screenshot saved');
     }
     public function show()
