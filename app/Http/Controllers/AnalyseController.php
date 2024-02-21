@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Validator;
 use Spatie\Browsershot\Browsershot;
 use Illuminate\Support\Facades\Http;
 use OpenAI\Laravel\Facades\OpenAI;
+use App\Models\Analyse;
 
 class AnalyseController extends Controller
 {
@@ -64,13 +65,17 @@ class AnalyseController extends Controller
                             "text" => "I would like you to make a textual summary of the session with the following information: 
                                 The title of the session is: " . $title . ";\n
                                 The goals of the session are: " . implode(', ', $goals) . ";\n
-                                The resources of the session are: " . implode(', ', $resources) . ";\n",
+                                The resources of the session are: " . implode(', ', $resources) . ";\n
+                                Here is an example of summary That i would like you to generate: 'In this session, discover strategies to address biases in aortic regurgitation, influenced by factors like etiology, natural history, surgical risk, age, and gender, and explore an imaging-centric approach to better quantify aortic regurgitation and comprehend its relationship with left ventricular remodeling and outcomes. Anticipate forthcoming guidelines that may introduce alternative management options for high surgical risk patients.'",
                         ],
                     ]
                 ],
             ],
         ]);
-        dd($chatResponse);
+        $summaryRexponse = $chatResponse->choices[0]->message->content;
+        $summaryTokenIn = $chatResponse->usage->promptTokens;
+        $summaryTokenOut = $chatResponse->usage->completionTokens;
+        $summaryTokenTotal = $chatResponse->usage->totalTokens;
 
         $name = md5(microtime());
         BrowserShot::url($request->url)
@@ -84,7 +89,6 @@ class AnalyseController extends Controller
         ->save(storage_path('app/public/screenshots/' . $name . '.png'));
 
         $imageBase64 = base64_encode(file_get_contents(storage_path('app/public/screenshots/' . $name . '.png')));
-
         $visionResponse = OpenAI::chat()->create([
             'model' => 'gpt-4-vision-preview',
             'messages' => [
@@ -106,11 +110,27 @@ class AnalyseController extends Controller
             ],
             'max_tokens' => 2048
         ]);
-        $response = $visionResponse->choices[0]->message->content;
-        $tokenIn = $visionResponse->usage->promptTokens;
-        $tokenOut = $visionResponse->usage->completionTokens;
-        $tokenTotal = $visionResponse->usage->totalTokens;
-        dd($response, $tokenIn, $tokenOut, $tokenTotal);
+        $analyseResponse = $visionResponse->choices[0]->message->content;
+        $analyseTokenIn = $visionResponse->usage->promptTokens;
+        $analyseTokenOut = $visionResponse->usage->completionTokens;
+        $analyseTokenTotal = $visionResponse->usage->totalTokens;
+
+        $analysis = new Analyse();
+        $analysis->url = $request->url;
+        $analysis->title = $title;
+        $analysis->goals = json_encode($goals);
+        $analysis->resources = json_encode($resources);
+        $analysis->summary = $summaryRexponse;
+        $analysis->image = $name . '.png';
+        $analysis->image_analyse = $analyseResponse;
+        $analysis->summary_tokens_in = $summaryTokenIn;
+        $analysis->summary_tokens_out = $summaryTokenOut;
+        $analysis->summary_tokens_total = $summaryTokenTotal;
+        $analysis->image_analyse_tokens_in = $analyseTokenIn;
+        $analysis->image_analyse_tokens_out = $analyseTokenOut;
+        $analysis->image_analyse_tokens_total = $analyseTokenTotal;
+        $analysis->save();
+
         return redirect()->back()->with('success', 'Screenshot saved');
     }
     public function show()
