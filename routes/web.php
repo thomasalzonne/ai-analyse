@@ -6,6 +6,7 @@ use App\Http\Controllers\EmailCampaignScreenshotController;
 use App\Http\Controllers\EmailClientController;
 use App\Http\Controllers\EmailListController;
 use App\Http\Controllers\ProfileController;
+use App\Http\Controllers\AnalyseController;
 use Illuminate\Support\Facades\Route;
 
 /*
@@ -42,4 +43,6 @@ Route::middleware('auth')->group(function () {
     Route::get('/domains/{domain}/email/campaigns/{emailCampaign}/screenshot/{device}', [EmailCampaignScreenshotController::class, 'get'])->name('email.campaign.screenshot');
 });
 
+Route::post('/analyse', [AnalyseController::class, 'analyse'])->name('analyse');
+Route::get('/analyse', [AnalyseController::class, 'show'])->name('analyse');
 require __DIR__.'/auth.php';

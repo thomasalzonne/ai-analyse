@@ -1,5 +1,5 @@
 services:
-    stats-laravel.test:
+    laravel.test:
         build:
             context: ./docker/8.3
             dockerfile: Dockerfile
@@ -23,11 +23,11 @@ services:
         networks:
             - sail
         depends_on:
-            - stats-mysql
-            - stats-meilisearch
-            - stats-mailpit
-            - stats-selenium
-    stats-mysql:
+            - mysql
+            - meilisearch
+            - mailpit
+            - selenium
+    mysql:
         image: 'mysql/mysql-server:8.0'
         ports:
             - '${FORWARD_DB_PORT:-3306}:3306'
@@ -52,7 +52,7 @@ services:
             retries: 3
             timeout: 5s
 
-    stats-chromium:
+    chromium:
         image: zenika/alpine-chrome
         command:
             [
@@ -75,7 +75,7 @@ services:
             sail:
                 ipv4_address: 172.22.0.100
             
-    stats-meilisearch:
+    meilisearch:
         image: 'getmeili/meilisearch:latest'
         ports:
             - '${FORWARD_MEILISEARCH_PORT:-7700}:7700'
@@ -94,14 +94,14 @@ services:
                 - 'http://localhost:7700/health'
             retries: 3
             timeout: 5s
-    stats-mailpit:
+    mailpit:
         image: 'axllent/mailpit:latest'
         ports:
             - '${FORWARD_MAILPIT_PORT:-1025}:1025'
             - '${FORWARD_MAILPIT_DASHBOARD_PORT:-8025}:8025'
         networks:
             - sail
-    stats-selenium:
+    selenium:
         image: selenium/standalone-chrome
         extra_hosts:
             - 'host.docker.internal:host-gateway'

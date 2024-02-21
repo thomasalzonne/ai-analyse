@@ -14,6 +14,7 @@
         "laravel/scout": "^10.8",
         "laravel/tinker": "^2.8",
         "meilisearch/meilisearch-php": "^1.6",
+        "openai-php/laravel": "^0.8.1",
         "spatie/browsershot": "^4.0",
         "spatie/image": "^3.3",
         "spatie/laravel-sluggable": "^3.5"
