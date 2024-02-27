@@ -51,7 +51,20 @@ services:
                 - '-p${DB_PASSWORD}'
             retries: 3
             timeout: 5s
-
+    phpmyadmin:
+        image: phpmyadmin/phpmyadmin
+        container_name: phpmyadmin
+        links:
+            - mysql
+        environment:
+            PMA_HOST: mysql
+            PMA_PORT: '${DB_PORT}'
+            PMA_ARBITRARY: 1
+            UPLOAD_LIMIT: 1G
+        ports:
+            - "8081:80"
+        networks:
+            - sail
     chromium:
         image: zenika/alpine-chrome
         command:
