@@ -146,9 +146,9 @@ class AnalyseController extends Controller
             'messages' => [['role' => 'user', 'content' => [['type' => 'text', 'text' => $message]]]],
         ]);
 
-        $summaryTokenIn = $chatResponse->usage->promptTokens;
-        $summaryTokenOut = $chatResponse->usage->completionTokens;
-        $summaryTokenTotal = $chatResponse->usage->totalTokens;
+        $summaryTokenIn = $chatResponse->usage->promptTokens ?? 0;
+        $summaryTokenOut = $chatResponse->usage->completionTokens ?? 0;
+        $summaryTokenTotal = $chatResponse->usage->totalTokens ?? 0;
         $summaryResponse = $chatResponse->choices[0]->message->content;
         return [$summaryResponse, $summaryTokenIn, $summaryTokenOut, $summaryTokenTotal];
     }
@@ -184,9 +184,9 @@ class AnalyseController extends Controller
                 ]]],
             'max_tokens' => 2048
         ]);
-        $analyseTokenIn = $visionResponse->usage->promptTokens;
-        $analyseTokenOut = $visionResponse->usage->completionTokens;
-        $analyseTokenTotal = $visionResponse->usage->totalTokens;
+        $analyseTokenIn = $visionResponse->usage->promptTokens ?? 0;
+        $analyseTokenOut = $visionResponse->usage->completionTokens ?? 0;
+        $analyseTokenTotal = $visionResponse->usage->totalTokens ?? 0;
         $analyse = $visionResponse->choices[0]->message->content;
         return [$analyse, $analyseTokenIn, $analyseTokenOut, $analyseTokenTotal];
     }
