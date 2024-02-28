@@ -74,24 +74,30 @@ class AnalyseController extends Controller
     private function extractArticle($html)
     {
         preg_match('/<article class="article-pcr">(.*?)<\/article>/s', $html, $matches);
-        $matches[0] = preg_replace('/\r/', '', $matches[0]);
-        $matches[0] = preg_replace('/\n/', '', $matches[0]);
-        return $matches[0] ?? false;
+
+        if(isset($matches[0])){
+            $matches[0] = preg_replace('/\r/', '', $matches[0]);
+            $matches[0] = preg_replace('/\n/', '', $matches[0]);
+            return $matches[0] ?? false;
+        }
+        return false;
     }
 
     private function extractContent($article)
     {
         $matches = [];
         preg_match('/<h1>(.*?)<\/h1>/', $article, $h1);
-        $title = $h1[1];
+        $title = $h1[1] ?? '';
     
         preg_match_all('/<ul class="main-list">(.*?)<\/ul>/', $article, $ul);
         $goals = [];
-        foreach ($ul[1] as $li) {
-            preg_match_all('/<li>(.*?)<\/li>/', $li, $li);
-            foreach ($li[1] as $li) {
-                $li = preg_replace('/\r/', '', $li);
-                $goals[] = strip_tags($li);
+        if(isset($ul[1])){
+            foreach ($ul[1] as $li) {
+                preg_match_all('/<li>(.*?)<\/li>/', $li, $li);
+                foreach ($li[1] as $li) {
+                    $li = preg_replace('/\r/', '', $li);
+                    $goals[] = strip_tags($li);
+                }
             }
         }
     
@@ -124,7 +130,16 @@ class AnalyseController extends Controller
 
     private function generateSummary($title, $goals, $resources)
     {
-        $message = "I would like you to make a textual summary of the session with the following information: \nThe title of the session is: $title;\n The goals of the session are: " . implode(', ', $goals) . ";\n The resources of the session are: " . implode(', ', $resources) . ";\n Here is an example of summary That i would like you to generate: 'In this session, discover strategies to address biases in aortic regurgitation, influenced by factors like etiology, natural history, surgical risk, age, and gender, and explore an imaging-centric approach to better quantify aortic regurgitation and comprehend its relationship with left ventricular remodeling and outcomes. Anticipate forthcoming guidelines that may introduce alternative management options for high surgical risk patients. I don't want you to list the goals and resources, but to generate a summary based on them.'";
+        $message = "I would like you to make a textual summary of the session with the following 
+        information: \nThe title of the session is: $title;\n The goals of the session 
+        are: " . implode(', ', $goals) . ";\n The resources of the session are: 
+        " . implode(', ', $resources) . ";\n Here is an example of summary That i would like you 
+        to generate: 'In this session, discover strategies to address biases in aortic regurgitation, 
+        influenced by factors like etiology, natural history, surgical risk, age, and gender, and 
+        explore an imaging-centric approach to better quantify aortic regurgitation and comprehend 
+        its relationship with left ventricular remodeling and outcomes. Anticipate forthcoming 
+        guidelines that may introduce alternative management options for high surgical risk patients. 
+        I don't want you to list the goals and resources, but to generate a summary based on them.";
         
         $chatResponse = OpenAI::chat()->create([
             'model' => 'gpt-3.5-turbo-0125',
