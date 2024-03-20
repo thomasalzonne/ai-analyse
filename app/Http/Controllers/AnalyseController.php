@@ -248,7 +248,18 @@ class AnalyseController extends Controller
         session\n
         - id\n
         - here you put the summary you generated for the session\n
-        Here are the datas :\n\n" . $sessions . "\n\n You must send me a summary for all the sessions, don't text me something like '... (repeated for all sessions)' after some session. I want you to give me all this in a json format. Here is an example of summary : 'In this session, discover strategies to address biases in aortic regurgitation, influenced by factors like etiology, natural history, surgical risk, age, and gender, and explore an imaging-centric approach to better quantify aortic regurgitation and comprehend its relationship with left ventricular remodeling and outcomes. Anticipate forthcoming guidelines that may introduce alternative management options for high surgical risk patients.'";
+        Here are the datas :\n\n" . $sessions . "\n\n You must send me a summary for all the sessions, don't text me something like '... (repeated for all sessions)' after some session. I want you to give me all this in a json format. Here is a list of examples of summaries with their respective titles:\n
+        Title: Stuck between a rock and a hard place: when calcium is the enemy!
+Summary: Have you ever wondered what tools and techniques to use when faced with calcified lesions? Watch this session to discover various cases of severely calcified lesions: the use of IVUS guidance and rota-cut when faced with tough calcium, PCI of a stubborn fibrotic coronary lesion, as well as the Rotascoring technique during a challenging case with an ACS patient.
+ 
+Title: Ultra-low contrast techniques in complex and high-risk coronary interventions
+Summary: Explore this session to gain insights into reducing operator reliance on contrast in PCI for enhanced safety and quality, particularly in complex scenarios. Discover essential tips, tricks, and specialized tools tailored for ultra-low-contrast PCI. Additionally, immerse yourself in a practical, step-by-step example through a recorded ultra-low-contrast PCI intervention.
+ 
+Title: Lifetime management - Tailoring treatment options to secure future possibilities
+Summary: Discover key insights in this video session from GulfPCR-GIM 2023 focusing on post-TAVI considerations. Gain understanding into the importance of posterior left ventricular and conduction disorders after TAVI and their impact on long-term outcomes. Explore the latest evidence regarding lifetime management for aortic stenosis patients. Delve into discussions about the impact of TAVI design on durability and TAV-in-TAV options, offering valuable perspectives for optimizing patient care and procedural efficacy.
+ 
+Title: Complex PCI in high bleeding risk patients, the way forward!
+Summary: Consult this session for insights on customizing PCI strategies for high-bleeding-risk patients, and selecting Drug-Eluting Stents in complex PCI. Additionally, examine the outcomes of the Ultimaster DES in high-bleeding-risk trials, particularly in the context of short Dual Antiplatelet Therapy.";
         
         $chatResponse = OpenAI::chat()->create([
             'model' => 'gpt-3.5-turbo-0125',
