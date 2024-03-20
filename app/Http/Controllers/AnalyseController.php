@@ -8,6 +8,7 @@ use Illuminate\Support\Facades\Http;
 use Spatie\Browsershot\Browsershot;
 use OpenAI\Laravel\Facades\OpenAI;
 use App\Models\Analyse;
+use App\Models\XmlSummary;
 
 class AnalyseController extends Controller
 {
@@ -19,28 +20,115 @@ class AnalyseController extends Controller
             return $this->redirectToFormWithError($validator);
         }
 
-        $html = $this->fetchHtml($request->url);
+        if($request->type === 'page'){
+            $html = $this->fetchHtml($request->url);
+        
+            if (!$this->isValidHtml($html)) {
+                return $this->redirectToFormWithError(['url' => 'The URL is not a valid HTML page']);
+            }
 
-        if (!$this->isValidHtml($html)) {
-            return $this->redirectToFormWithError(['url' => 'The URL is not a valid HTML page']);
+            $article = $this->extractArticle($html);
+
+            if (!$article) {
+                return $this->redirectToFormWithError(['url' => 'No content found on this URL']);
+            }
+    
+            [$title, $goals, $resources] = $this->extractContent($article);
+    
+            [$summaryResponse, $summaryTokenIn, $summaryTokenOut, $summaryTokenTotal] = $this->generateSummary($title, $goals, $resources);
+            $imageFilename = $this->captureScreenshot($request->url);
+            $imageBase64 = $this->convertImageToBase64($imageFilename);
+            [$analyseResponse, $analyseTokenIn, $analyseTokenOut, $analyseTokenTotal] = $this->analyzeImage($imageBase64);
+    
+            $this->saveAnalysis($request->url, $title, $goals, $resources, $summaryResponse, $imageFilename, $analyseResponse, $summaryTokenIn, $summaryTokenOut, $summaryTokenTotal, $analyseTokenIn, $analyseTokenOut, $analyseTokenTotal);
+    
+            return redirect()->back()->with('success', 'Screenshot saved');
         }
+        elseif($request->type === 'xml'){
+            $xmlContent = file_get_contents($request->url);
+            $xml = simplexml_load_string($xmlContent);
+            $sessionsData = [];
+            $topicsData = $xml->topics;
+            $specialitiesData = $xml->specialities;
+            foreach ($xml->sessions->session as $session) {
+                $sessionData = [
+                    'id' => (string)$session['id'],
+                    'title' => (string)$session->title,
+                    'subtitle' => (string)$session->subtitle,
+                    'objectives' => [],
+                    'topics' => [],
+                    'specialities' => [],
+                    'interventions' => []
+                ];
+                if (isset($session->objectives->objective)) {
+                    foreach ($session->objectives->objective as $objective) {
+                        $sessionData['objectives'][] = (string)$objective;
+                    }
+                }
+                
+                // Récupérer les topics
+                if (isset($session->topics)) {
+                    $topicsIds = explode('|', (string)$session->topics);
+                    foreach ($topicsIds as $topicId) {
+                        $topicName = $this->getTopicNameById($topicsData, $topicId);
+                        if ($topicName) {
+                            $sessionData['topics'][] = [
+                                'id' => $topicId,
+                                'name' => $topicName
+                            ];
+                        }
+                    }
+                }
 
-        $article = $this->extractArticle($html);
+                // Récupérer les specialities
+                if (isset($session->specialities)) {
+                    $specialitiesIds = explode('|', (string)$session->specialities);
+                    foreach ($specialitiesIds as $specialityId) {
+                        $specialityName = $this->getSpecialityNameById($specialitiesData, $specialityId);
+                        if ($specialityName) {
+                            $sessionData['specialities'][] = [
+                                'id' => $specialityId,
+                                'name' => $specialityName
+                            ];
+                        }
+                    }
+                }
 
-        if (!$article) {
-            return $this->redirectToFormWithError(['url' => 'No content found on this URL']);
+                foreach ($session->interventions->intervention as $intervention) {
+                    $interventionData = [
+                        'title' => (string)$intervention->title,
+                        'speakers' => []
+                    ];
+        
+                    // Vérifier si des intervenants sont présents
+                    if (isset($intervention->speakers->speaker)) {
+                        foreach ($intervention->speakers->speaker as $speaker) {
+                            $speakerId = (string)$speaker->id;
+                            // Recherchez le nom du speaker à partir de son remote_id
+                            $speakerName = $this->getSpeakerNameById($xml->physicians, $speakerId);
+                            if ($speakerName) {
+                                $interventionData['speakers'][] = $speakerName;
+                            }
+                        }
+                    }
+        
+                    $sessionData['interventions'][] = $interventionData;
+                }
+    
+                $sessionsData[] = $sessionData;
+            }
+            $jsonDataChunks = array_chunk($sessionsData, 10);
+            // foreach ($jsonDataChunks as $key => $jsonData) {
+            //     $jsonData = json_encode(['sessions' => $jsonData]);
+            //     [$summaryResponse, $summaryTokenIn, $summaryTokenOut, $summaryTokenTotal] = $this->generateSummaryForSessions($jsonData);
+            //     $this->saveXmlAnalysis($request->url . '_' . $key, $summaryResponse);
+            // }
+            $jsonData = json_encode(['sessions' => $jsonDataChunks[0]]);
+            [$summaryResponse, $summaryTokenIn, $summaryTokenOut, $summaryTokenTotal] = $this->generateSummaryForSessions($jsonData);
+            $this->saveXmlAnalysis($request->url, $summaryResponse);
+            return redirect()->back()->with('success', 'Summary saved');
         }
-
-        [$title, $goals, $resources] = $this->extractContent($article);
-
-        [$summaryResponse, $summaryTokenIn, $summaryTokenOut, $summaryTokenTotal] = $this->generateSummary($title, $goals, $resources);
-        $imageFilename = $this->captureScreenshot($request->url);
-        $imageBase64 = $this->convertImageToBase64($imageFilename);
-        [$analyseResponse, $analyseTokenIn, $analyseTokenOut, $analyseTokenTotal] = $this->analyzeImage($imageBase64);
-
-        $this->saveAnalysis($request->url, $title, $goals, $resources, $summaryResponse, $imageFilename, $analyseResponse);
-
-        return redirect()->back()->with('success', 'Screenshot saved');
+        return redirect()->back()->with('error', 'Something went wrong. Please try again.');
     }
 
     public function show()
@@ -153,6 +241,27 @@ class AnalyseController extends Controller
         return [$summaryResponse, $summaryTokenIn, $summaryTokenOut, $summaryTokenTotal];
     }
 
+    private function generateSummaryForSessions($sessions)
+    {
+        $message = "I'll give you data about sessions we do at PCR. I would like you to make a detailed textual summary for each session.\n
+        For each session, you'll return me something like that:\n
+        session\n
+        - id\n
+        - here you put the summary you generated for the session\n
+        Here are the datas :\n\n" . $sessions . "\n\n You must send me a summary for all the sessions, don't text me something like '... (repeated for all sessions)' after some session. I want you to give me all this in a json format. Here is an example of summary : 'In this session, discover strategies to address biases in aortic regurgitation, influenced by factors like etiology, natural history, surgical risk, age, and gender, and explore an imaging-centric approach to better quantify aortic regurgitation and comprehend its relationship with left ventricular remodeling and outcomes. Anticipate forthcoming guidelines that may introduce alternative management options for high surgical risk patients.'";
+        
+        $chatResponse = OpenAI::chat()->create([
+            'model' => 'gpt-3.5-turbo-0125',
+            'messages' => [['role' => 'user', 'content' => [['type' => 'text', 'text' => $message]]]],
+        ]);
+
+        $summaryTokenIn = $chatResponse->usage->promptTokens ?? 0;
+        $summaryTokenOut = $chatResponse->usage->completionTokens ?? 0;
+        $summaryTokenTotal = $chatResponse->usage->totalTokens ?? 0;
+        $summaryResponse = $chatResponse->choices[0]->message->content;
+        return [$summaryResponse, $summaryTokenIn, $summaryTokenOut, $summaryTokenTotal];
+    }
+
     private function captureScreenshot($url)
     {
         $name = md5(microtime());
@@ -191,7 +300,7 @@ class AnalyseController extends Controller
         return [$analyse, $analyseTokenIn, $analyseTokenOut, $analyseTokenTotal];
     }
 
-    private function saveAnalysis($url, $title, $goals, $resources, $summaryResponse, $imageFilename, $analyseResponse)
+    private function saveAnalysis($url, $title, $goals, $resources, $summaryResponse, $imageFilename, $analyseResponse, $summaryTokenIn, $summaryTokenOut, $summaryTokenTotal, $analyseTokenIn, $analyseTokenOut, $analyseTokenTotal)
     {
         $analysis = new Analyse();
         $analysis->url = $url;
@@ -201,12 +310,55 @@ class AnalyseController extends Controller
         $analysis->summary = $summaryResponse;
         $analysis->image = $imageFilename;
         $analysis->image_analyse = $analyseResponse;
-        $analysis->summary_token_in = $summaryTokenIn;
-        $analysis->summary_token_out = $summaryTokenOut;
-        $analysis->summary_token_total = $summaryTokenTotal;
-        $analysis->analyse_token_in = $analyseTokenIn;
-        $analysis->analyse_token_out = $analyseTokenOut;
-        $analysis->analyse_token_total = $analyseTokenTotal;
+        $analysis->summary_tokens_in = $summaryTokenIn;
+        $analysis->summary_tokens_out = $summaryTokenOut;
+        $analysis->summary_tokens_total = $summaryTokenTotal;
+        $analysis->image_analyse_tokens_in = $analyseTokenIn;
+        $analysis->image_analyse_tokens_out = $analyseTokenOut;
+        $analysis->image_analyse_tokens_total = $analyseTokenTotal;
         $analysis->save();
+    }
+
+    private function saveXmlAnalysis($url, $summary)
+    {
+        $analysis = new XmlSummary();
+        $analysis->url = $url;
+        $analysis->summary = $summary;
+        $analysis->save();
+    }
+
+    private function getSpeakerNameById($physicians, $speakerId)
+    {
+        foreach ($physicians->physician as $physician) {
+            // Vérifier si l'identifiant du médecin correspond à l'identifiant du speaker
+            if ((string)$physician['id'] === $speakerId) {
+                $title = isset($physician->title) ? (string)$physician->title : '';
+                $firstname = isset($physician->firstname) ? (string)$physician->firstname : '';
+                $lastname = isset($physician->lastname) ? (string)$physician->lastname : '';
+                return $title . ' ' . $firstname . ' ' . $lastname;
+            }
+        }
+        return null; // Retourne null si le nom du speaker n'est pas trouvé
+    }
+
+    private function getTopicNameById($topicsData, $topicId)
+    {
+        foreach ($topicsData->topic as $topic) {
+            if ((string)$topic['id'] === $topicId) {
+                return (string)$topic->name;
+            }
+        }
+        return null;
+    }
+
+    // Fonction pour obtenir le nom de la speciality à partir de son ID
+    private function getSpecialityNameById($specialitiesData, $specialityId)
+    {
+        foreach ($specialitiesData->speciality as $speciality) {
+            if ((string)$speciality['id'] === $specialityId) {
+                return (string)$speciality->name;
+            }
+        }
+        return null;
     }
 }

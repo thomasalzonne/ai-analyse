@@ -11,7 +11,10 @@
                 <form action="{{ route('analyse') }}" method="post">
                     @csrf
                     <input type="text" name="url" placeholder="URL">
-                    <!-- Ajoutez d'autres champs selon vos besoins, par exemple un select -->
+                    <select name="type">
+                        <option value="page">Page classique</option>
+                        <option value="xml">Lien XML</option>
+                    </select>
                     <button type="submit">Analyser</button>
                 </form>
             </div>
