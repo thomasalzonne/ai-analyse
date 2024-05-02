@@ -9,6 +9,11 @@ use Spatie\Browsershot\Browsershot;
 use OpenAI\Laravel\Facades\OpenAI;
 use App\Models\Analyse;
 use App\Models\XmlSummary;
+use App\Facades\AiFacade;
+use SimpleXMLElement;
+use Illuminate\Support\Facades\Log;
+use DOMDocument;
+use Illuminate\Support\Sleep;
 
 class AnalyseController extends Controller
 {
@@ -46,29 +51,34 @@ class AnalyseController extends Controller
         }
         elseif($request->type === 'xml'){
             $xmlContent = file_get_contents($request->url);
-            $xml = simplexml_load_string($xmlContent);
+            $xml = new DOMDocument();
+            $xml->loadXML($xmlContent);
+
             $sessionsData = [];
-            $topicsData = $xml->topics;
-            $specialitiesData = $xml->specialities;
-            foreach ($xml->sessions->session as $session) {
+            $topicsData = $xml->getElementsByTagName('topics')->item(0); // Première occurrence de la balise topics
+            $specialitiesData = $xml->getElementsByTagName('specialities')->item(0); // Première occurrence de la balise specialities
+
+            foreach ($xml->getElementsByTagName('session') as $session) {
                 $sessionData = [
-                    'id' => (string)$session['id'],
-                    'title' => (string)$session->title,
-                    'subtitle' => (string)$session->subtitle,
+                    'id' => $session->getAttribute('id'),
+                    'title' => $session->getElementsByTagName('title')->item(0)->nodeValue,
+                    'subtitle' => $session->getElementsByTagName('subtitle')->item(0)->nodeValue,
                     'objectives' => [],
                     'topics' => [],
                     'specialities' => [],
                     'interventions' => []
                 ];
-                if (isset($session->objectives->objective)) {
-                    foreach ($session->objectives->objective as $objective) {
-                        $sessionData['objectives'][] = (string)$objective;
-                    }
+
+                // Objectifs
+                $objectiveElements = $session->getElementsByTagName('objective');
+                foreach ($objectiveElements as $objective) {
+                    $sessionData['objectives'][] = $objective->nodeValue;
                 }
-                
-                // Récupérer les topics
-                if (isset($session->topics)) {
-                    $topicsIds = explode('|', (string)$session->topics);
+
+                // Topics
+                $topicsElement = $session->getElementsByTagName('topics')->item(0);
+                if ($topicsElement) {
+                    $topicsIds = explode('|', $topicsElement->nodeValue);
                     foreach ($topicsIds as $topicId) {
                         $topicName = $this->getTopicNameById($topicsData, $topicId);
                         if ($topicName) {
@@ -80,9 +90,10 @@ class AnalyseController extends Controller
                     }
                 }
 
-                // Récupérer les specialities
-                if (isset($session->specialities)) {
-                    $specialitiesIds = explode('|', (string)$session->specialities);
+                // Spécialités
+                $specialitiesElement = $session->getElementsByTagName('specialities')->item(0);
+                if ($specialitiesElement) {
+                    $specialitiesIds = explode('|', $specialitiesElement->nodeValue);
                     foreach ($specialitiesIds as $specialityId) {
                         $specialityName = $this->getSpecialityNameById($specialitiesData, $specialityId);
                         if ($specialityName) {
@@ -94,41 +105,92 @@ class AnalyseController extends Controller
                     }
                 }
 
-                foreach ($session->interventions->intervention as $intervention) {
+                // Interventions
+                $interventionElements = $session->getElementsByTagName('intervention');
+                foreach ($interventionElements as $intervention) {
                     $interventionData = [
-                        'title' => (string)$intervention->title,
+                        'title' => $intervention->getElementsByTagName('title')->item(0)->nodeValue,
                         'speakers' => []
                     ];
-        
-                    // Vérifier si des intervenants sont présents
-                    if (isset($intervention->speakers->speaker)) {
-                        foreach ($intervention->speakers->speaker as $speaker) {
-                            $speakerId = (string)$speaker->id;
-                            // Recherchez le nom du speaker à partir de son remote_id
-                            $speakerName = $this->getSpeakerNameById($xml->physicians, $speakerId);
-                            if ($speakerName) {
-                                $interventionData['speakers'][] = $speakerName;
-                            }
+                    $speakerElements = $intervention->getElementsByTagName('speaker');
+                    foreach ($speakerElements as $speaker) {
+                        $speakerId = $speaker->getAttribute('id');
+                        $speakerName = $this->getSpeakerNameById($xml->getElementsByTagName('physicians')->item(0), $speakerId);
+                        if ($speakerName) {
+                            $interventionData['speakers'][] = $speakerName;
                         }
                     }
-        
                     $sessionData['interventions'][] = $interventionData;
                 }
-    
+
                 $sessionsData[] = $sessionData;
             }
-            $jsonDataChunks = array_chunk($sessionsData, 10);
-            // foreach ($jsonDataChunks as $key => $jsonData) {
-            //     $jsonData = json_encode(['sessions' => $jsonData]);
-            //     [$summaryResponse, $summaryTokenIn, $summaryTokenOut, $summaryTokenTotal] = $this->generateSummaryForSessions($jsonData);
-            //     $this->saveXmlAnalysis($request->url . '_' . $key, $summaryResponse);
-            // }
-            $jsonData = json_encode(['sessions' => $jsonDataChunks[0]]);
-            [$summaryResponse, $summaryTokenIn, $summaryTokenOut, $summaryTokenTotal] = $this->generateSummaryForSessions($jsonData);
-            $this->saveXmlAnalysis($request->url, $summaryResponse);
+
+            // Générer les résumés pour les sessions
+            $jsonDataChunks = array_chunk($sessionsData, 15);
+            $sessionsGenerated = [];
+            $pattern = '/\{(?:[^{}]|(?R))*\}/';
+            foreach ($jsonDataChunks as $chunk) {
+                Sleep::for(10)->seconds();
+                $jsonData = json_encode(['sessions' => $chunk]);
+                [$summaryResponse, $summaryTokenIn, $summaryTokenOut, $summaryTokenTotal] = $this->generateSummaryForSessions($jsonData);
+                preg_match_all($pattern, $summaryResponse, $matches);
+                foreach ($matches[0] as $match) {
+                    $datas = $this->getTextBetweenTags($match, ['title', 'summary', 'meta_description', 'teaser_title', 'teaser_text']);
+                    Log::info(json_encode($datas,true));
+                    $sessionsGenerated[] = $datas;
+                }
+            }
+
+            // Intégrer les données générées dans le XML
+            $key = 0;
+            foreach ($xml->getElementsByTagName('session') as $session) {
+                // Créer des éléments CDATA pour chaque donnée générée
+                $summaryCDATA = $xml->createCDATASection($sessionsGenerated[$key]['summary'] ?? "");
+                $metaDescriptionCDATA = $xml->createCDATASection($sessionsGenerated[$key]['meta_description'] ?? "");
+                $teaserTitleCDATA = $xml->createCDATASection($sessionsGenerated[$key]['teaser_title'] ?? "");
+                $teaserTextCDATA = $xml->createCDATASection($sessionsGenerated[$key]['teaser_text'] ?? "");
+
+                // Créer des éléments et les ajouter à la session
+                $summaryElement = $xml->createElement('introduction');
+                $summaryElement->appendChild($summaryCDATA);
+                $session->appendChild($summaryElement);
+
+                $metaDescriptionElement = $xml->createElement('meta_description');
+                $metaDescriptionElement->appendChild($metaDescriptionCDATA);
+                $session->appendChild($metaDescriptionElement);
+
+                $teaserTitleElement = $xml->createElement('teaser_title');
+                $teaserTitleElement->appendChild($teaserTitleCDATA);
+                $session->appendChild($teaserTitleElement);
+
+                $teaserTextElement = $xml->createElement('teaser_text');
+                $teaserTextElement->appendChild($teaserTextCDATA);
+                $session->appendChild($teaserTextElement);
+
+                $key++;
+            }
+
+            // Sauvegarder le XML modifié
+            $xmlContentModified = $xml->saveXML();
+
+            // Écrire le contenu modifié dans un nouveau fichier XML
+            $newFileName = 'data4.xml';
+            $filePath = public_path() . '/' . $newFileName;
+            file_put_contents($filePath, $xmlContentModified);
+
             return redirect()->back()->with('success', 'Summary saved');
         }
         return redirect()->back()->with('error', 'Something went wrong. Please try again.');
+    }
+
+    public function getTextBetweenTags($html, $tags) {
+        foreach ($tags as $tag) {
+        $pattern = "/<$tag>(.*?)<\/$tag>/";
+        preg_match($pattern, $html, $matches);
+        $result[$tag] = $matches[1] ?? '';
+        }
+        return $result;
     }
 
     public function show()
@@ -243,34 +305,116 @@ class AnalyseController extends Controller
 
     private function generateSummaryForSessions($sessions)
     {
-        $message = "I'll give you data about sessions we do at PCR. I would like you to make a detailed textual summary for each session.\n
-        For each session, you'll return me something like that:\n
-        session\n
-        - id\n
-        - here you put the summary you generated for the session\n
-        Here are the datas :\n\n" . $sessions . "\n\n You must send me a summary for all the sessions, don't text me something like '... (repeated for all sessions)' after some session. I want you to give me all this in a json format. Here is a list of examples of summaries with their respective titles:\n
-        Title: Stuck between a rock and a hard place: when calcium is the enemy!
-Summary: Have you ever wondered what tools and techniques to use when faced with calcified lesions? Watch this session to discover various cases of severely calcified lesions: the use of IVUS guidance and rota-cut when faced with tough calcium, PCI of a stubborn fibrotic coronary lesion, as well as the Rotascoring technique during a challenging case with an ACS patient.
- 
-Title: Ultra-low contrast techniques in complex and high-risk coronary interventions
-Summary: Explore this session to gain insights into reducing operator reliance on contrast in PCI for enhanced safety and quality, particularly in complex scenarios. Discover essential tips, tricks, and specialized tools tailored for ultra-low-contrast PCI. Additionally, immerse yourself in a practical, step-by-step example through a recorded ultra-low-contrast PCI intervention.
- 
-Title: Lifetime management - Tailoring treatment options to secure future possibilities
-Summary: Discover key insights in this video session from GulfPCR-GIM 2023 focusing on post-TAVI considerations. Gain understanding into the importance of posterior left ventricular and conduction disorders after TAVI and their impact on long-term outcomes. Explore the latest evidence regarding lifetime management for aortic stenosis patients. Delve into discussions about the impact of TAVI design on durability and TAV-in-TAV options, offering valuable perspectives for optimizing patient care and procedural efficacy.
- 
-Title: Complex PCI in high bleeding risk patients, the way forward!
-Summary: Consult this session for insights on customizing PCI strategies for high-bleeding-risk patients, and selecting Drug-Eluting Stents in complex PCI. Additionally, examine the outcomes of the Ultimaster DES in high-bleeding-risk trials, particularly in the context of short Dual Antiplatelet Therapy.";
-        
-        $chatResponse = OpenAI::chat()->create([
-            'model' => 'gpt-3.5-turbo-0125',
-            'messages' => [['role' => 'user', 'content' => [['type' => 'text', 'text' => $message]]]],
-        ]);
+        $prompt = 'PCR Online is a virtual event platform that hosts online conferences and events related to polymerase chain reaction (PCR) and molecular biology techniques.
 
-        $summaryTokenIn = $chatResponse->usage->promptTokens ?? 0;
-        $summaryTokenOut = $chatResponse->usage->completionTokens ?? 0;
-        $summaryTokenTotal = $chatResponse->usage->totalTokens ?? 0;
-        $summaryResponse = $chatResponse->choices[0]->message->content;
-        return [$summaryResponse, $summaryTokenIn, $summaryTokenOut, $summaryTokenTotal];
+
+
+        You will receive information about sessions from PCR Online events. For each session, you will be provided with the following details:
+        
+        
+        
+        - Title
+        
+        - Subtitle 
+        
+        - Objectives
+        
+        - Topics and Specialties
+        
+        - Interventions with Speakers
+        
+        
+        Your task is to create a very detailed summary, a meta description, a teaser title and text for each session, even if it is duplicate, based on the provided information. The summary should capture the key points, concepts, and insights discussed in the session. You can\'t use double quote in the summary, meta description, teaser title and text.
+        
+        
+        Example Summaries:
+        
+        
+        Title: Stuck between a rock and a hard place: when calcium is the enemy!
+        Summary: Have you ever wondered what tools and techniques to use when faced with calcified lesions? Watch this session to discover various cases of severely calcified lesions: the use of IVUS guidance and rota-cut when faced with tough calcium, PCI of a stubborn fibrotic coronary lesion, as well as the Rotascoring technique during a challenging case with an ACS patient.
+        Meta-Description: Discover various cases of severely calcified lesions: the use of IVUS guidance and rota-cut when faced with tough calcium, PCI of a stubborn fibrotic coronary lesion, as well as the Rotascoring technique during a challenging case with an ACS patient.
+        Teaser Title: Stuck between a rock and a hard place: when calcium is the enemy!
+        Teaser Text: Have you ever wondered what tools and techniques to use when faced with calcified lesions? Watch this session to discover various cases of severely calcified lesions: the use of IVUS guidance and rota-cut when faced with tough calcium, PCI of a stubborn fibrotic coronary lesion, as well as the Rotascoring technique during a challenging case with an ACS patient.
+
+        
+        Title: Ultra-low contrast techniques in complex and high-risk coronary interventions
+        Summary: Explore this session to gain insights into reducing operator reliance on contrast in PCI for enhanced safety and quality, particularly in complex scenarios. Discover essential tips, tricks, and specialized tools tailored for ultra-low-contrast PCI. Additionally, immerse yourself in a practical, step-by-step example through a recorded ultra-low-contrast PCI intervention.
+        Meta-Description: Explore this session to gain insights into reducing operator reliance on contrast in PCI for enhanced safety and quality, particularly in complex scenarios. Discover essential tips, tricks, and specialized tools tailored for ultra-low-contrast PCI. Additionally, immerse yourself in a practical, step-by-step example through a recorded ultra-low-contrast PCI intervention.
+        Teaser Title: Ultra-low contrast techniques in complex and high-risk coronary interventions
+        Teaser Text: Gain insights into reducing operator reliance on contrast in PCI for enhanced safety and quality, particularly in complex scenarios. Discover essential tips, tricks, and specialized tools tailored for ultra-low-contrast PCI.
+        
+
+        Title: Lifetime management - Tailoring treatment options to secure future possibilities  
+        Summary: Discover key insights in this video session from GulfPCR-GIM 2023 focusing on post-TAVI considerations. Gain understanding into the importance of posterior left ventricular and conduction disorders after TAVI and their impact on long-term outcomes. Explore the latest evidence regarding lifetime management for aortic stenosis patients. Delve into discussions about the impact of TAVI design on durability and TAV-in-TAV options, offering valuable perspectives for optimizing patient care and procedural efficacy.
+        Meta-Description: Discover key insights in this GulfPCR-GIM 2023 session focusing on post-TAVI considerations: impact of of posterior left ventricular and conduction disorders after TAVI on long-term outcomes, latest evidence regarding lifetime management for aortic stenosis patients, and impact of TAVI design on durability and TAV-in-TAV options
+        Teaser Title: Lifetime management - Tailoring treatment options to secure future possibilities
+        Teaser Text: Find out more about the impact of of posterior left ventricular and conduction disorders after TAVI on long-term outcomes, the latest evidence regarding lifetime management for aortic stenosis patients, and the impact of TAVI design on durability and TAV-in-TAV options.
+
+        
+        Title: Complex PCI in high bleeding risk patients, the way forward!
+        Summary: Consult this session for insights on customizing PCI strategies for high-bleeding-risk patients, and selecting Drug-Eluting Stents in complex PCI. Additionally, examine the outcomes of the Ultimaster DES in high-bleeding-risk trials, particularly in the context of short Dual Antiplatelet Therapy.
+        Meta-Description: Consult this session for insights on customizing PCI strategies for high-bleeding-risk patients, and selecting Drug-Eluting Stents (#DES) in complex #PCI. Additionally, examine the outcomes of the Ultimaster DES in high-bleeding-risk trials, particularly in the context of short Dual Antiplatelet Therapy (#DAPT).
+        Teaser Title: Complex PCI in high bleeding risk patients, the way forward!
+        Teaser Text: Get insights on customizing PCI strategies for high-bleeding-risk patients and selecting DES in complex PCI. Additionally, examine the outcomes of the Ultimaster DES with short DAPT in high-bleeding-risk trials.
+        
+        After summarizing all the sessions, you need to return the summaries in the following structure:
+        
+        
+        
+        [
+        
+          {
+            <id>"Session ID 1"</id>,
+        
+            <title>"Session Title 1"</title>, 
+        
+            <summary>"Detailed summary for Session 1..."</summary>,
+
+            <meta_description>"Meta data for Session 1..."</meta_description>,
+
+            <teaser_title>"Teaser Title for Session 1"</teaser_title,
+
+            <teaser_text>"Teaser text for Session 1"</teaser_text>
+        
+          },
+        
+          {
+            <id>"Session ID 2"</id>,
+        
+            <title>"Session Title 2"</title>,
+        
+            <summary>"Detailed summary for Session 2..."</summary>,
+
+            <meta_description>"Meta data for Session 2..."</meta_description>,
+
+            <teaser_title>"Teaser Title for Session 2"</teaser_title>,
+
+            <teaser_text>"Teaser text for Session 2"</teaser_text>
+        
+          },
+        
+          ...
+        
+        ]';
+
+        $message = "Create a very detailed summary, a meta description, a teaser title and text for all the sessions below:\n" . $sessions;
+        $resultFromAi = AiFacade::ask($message, $prompt);
+        $answerFromAi = $resultFromAi['completion'];
+        $metadata = $resultFromAi['metadata'];
+        $inputTokens = $resultFromAi['inputTokens'];
+        $outputTokens = $resultFromAi['outputTokens'];
+        // dd($answerFromAi, $inputTokens, $outputTokens, $metadata);
+        
+        // $chatResponse = OpenAI::chat()->create([
+        //     'model' => 'gpt-3.5-turbo-0125',
+        //     'messages' => [['role' => 'user', 'content' => [['type' => 'text', 'text' => $message]]]],
+        // ]);
+
+        // $summaryTokenIn = $chatResponse->usage->promptTokens ?? 0;
+        // $summaryTokenOut = $chatResponse->usage->completionTokens ?? 0;
+        // $summaryTokenTotal = $chatResponse->usage->totalTokens ?? 0;
+        // $summaryResponse = $chatResponse->choices[0]->message->content;
+        return [$answerFromAi, $inputTokens, $outputTokens, $metadata];
     }
 
     private function captureScreenshot($url)
@@ -340,36 +484,62 @@ Summary: Consult this session for insights on customizing PCI strategies for hig
 
     private function getSpeakerNameById($physicians, $speakerId)
     {
-        foreach ($physicians->physician as $physician) {
-            // Vérifier si l'identifiant du médecin correspond à l'identifiant du speaker
-            if ((string)$physician['id'] === $speakerId) {
-                $title = isset($physician->title) ? (string)$physician->title : '';
-                $firstname = isset($physician->firstname) ? (string)$physician->firstname : '';
-                $lastname = isset($physician->lastname) ? (string)$physician->lastname : '';
-                return $title . ' ' . $firstname . ' ' . $lastname;
+        // Récupérer tous les éléments <physician>
+        $physicianElements = $physicians->getElementsByTagName('physician');
+
+        // Parcourir chaque élément <physician>
+        foreach ($physicianElements as $physician) {
+            // Vérifier si l'attribut id correspond à celui recherché
+            if ($physician->getAttribute('id') === $speakerId) {
+                // Construire le nom du speaker
+                $title = $physician->getElementsByTagName('title')->item(0)->nodeValue ?? '';
+                $firstname = $physician->getElementsByTagName('firstname')->item(0)->nodeValue ?? '';
+                $lastname = $physician->getElementsByTagName('lastname')->item(0)->nodeValue ?? '';
+                return trim("$title $firstname $lastname");
             }
         }
-        return null; // Retourne null si le nom du speaker n'est pas trouvé
+        // Si aucun médecin correspondant n'est trouvé, retourner null
+        return null;
     }
+
 
     private function getTopicNameById($topicsData, $topicId)
     {
-        foreach ($topicsData->topic as $topic) {
-            if ((string)$topic['id'] === $topicId) {
-                return (string)$topic->name;
+        // Récupérer tous les éléments <topic>
+        $topicElements = $topicsData->getElementsByTagName('topic');
+    
+        // Parcourir chaque élément <topic>
+        foreach ($topicElements as $topic) {
+            // Vérifier si l'attribut id correspond à celui recherché
+            if ($topic->getAttribute('id') === $topicId) {
+                // Récupérer le nom du topic
+                $nameElement = $topic->getElementsByTagName('name')->item(0);
+                if ($nameElement) {
+                    return $nameElement->nodeValue;
+                }
             }
         }
+        // Si aucun topic correspondant n'est trouvé, retourner null
         return null;
     }
+    
 
     // Fonction pour obtenir le nom de la speciality à partir de son ID
     private function getSpecialityNameById($specialitiesData, $specialityId)
     {
-        foreach ($specialitiesData->speciality as $speciality) {
-            if ((string)$speciality['id'] === $specialityId) {
-                return (string)$speciality->name;
+        // Récupérer tous les éléments <speciality>
+        $specialityElements = $specialitiesData->getElementsByTagName('speciality');
+    
+        // Parcourir chaque élément <speciality>
+        foreach ($specialityElements as $speciality) {
+            // Vérifier si l'attribut id correspond à celui recherché
+            if ($speciality->getAttribute('id') === $specialityId) {
+                // Récupérer le nom de la spécialité
+                return $speciality->getElementsByTagName('name')->item(0)->nodeValue;
             }
         }
+        // Si aucune spécialité correspondante n'est trouvée, retourner null
         return null;
     }
+    
 }
